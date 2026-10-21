@@ -1,0 +1,12 @@
+libcore user add — создать пользователя.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore user add <name> <password> [--role reader|moderator]
+
+ОПИСАНИЕ:
+    Требуется роль host. Пароль хэшируется scrypt.
+    По умолчанию роль — reader.
+
+ПРИМЕРЫ:
+    libcore user add vasya qwerty123
+    libcore user add petya qwerty456 --role moderator

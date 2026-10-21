@@ -1,0 +1,8 @@
+
+libcore user details — детали пользователя.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore user details <user>
+
+ОПИСАНИЕ:
+    Reader видит чужие детали только если profile_public=1.

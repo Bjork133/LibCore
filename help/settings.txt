@@ -1,0 +1,11 @@
+libcore settings — настройки клиента.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore settings <ПОДКОМАНДА> [АРГУМЕНТЫ]
+
+ПОДКОМАНДЫ:
+    show                       Показать все настройки
+    time-format [PATTERN]      Показать/задать формат даты
+    loan-days [N]              Показать/задать срок выдачи
+
+Файл: ~/.config/libcore/settings.json

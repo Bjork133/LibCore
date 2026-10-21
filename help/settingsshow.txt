@@ -1,0 +1,4 @@
+libcore settings show — показать настройки.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore settings show

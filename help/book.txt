@@ -1,0 +1,18 @@
+libcore book — управление книгами.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book <ПОДКОМАНДА> [АРГУМЕНТЫ] [ФЛАГИ]
+
+ПОДКОМАНДЫ:
+    add [--title T] [--author A] [--year Y] [--isbn I] [--count N]
+        Добавить книгу (moderator+). Если книга с таким же
+        title+author уже есть — добавит N копий к ней.
+    info <query>            Найти книги (по title/author/isbn)
+    info --id <ID>          Карточка книги + список копий
+    list [--available]      Список всех книг (или только доступных)
+
+ПРИМЕРЫ:
+    libcore book add --title "1984" --author "Orwell" --year 1949 --count 3
+    libcore book info Orwell
+    libcore book info --id 42
+    libcore book list --available

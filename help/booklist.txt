@@ -1,0 +1,7 @@
+libcore book list — список книг.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book list [--available]
+
+ОПИСАНИЕ:
+    --available: только книги, у которых есть доступные копии.

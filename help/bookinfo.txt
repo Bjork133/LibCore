@@ -1,0 +1,9 @@
+libcore book info — найти книгу или показать карточку.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book info <query>
+    libcore book info --id <ID>
+
+ОПИСАНИЕ:
+    Без --id: ищет по подстроке в title/author/isbn, выдаёт список.
+    С --id: карточка книги + все копии.

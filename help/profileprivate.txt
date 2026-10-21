@@ -1,0 +1,4 @@
+libcore profile private — закрыть флаг.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore profile private <profile|books|stats>

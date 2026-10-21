@@ -1,0 +1,4 @@
+libcore book givedate — когда выдана копия.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book givedate <copyID>

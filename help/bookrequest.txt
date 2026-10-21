@@ -1,0 +1,8 @@
+libcore book request — запросить книгу.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book request <bookID> [--until DATE]
+
+ОПИСАНИЕ:
+    Создаёт pending-запрос на выдачу. Модератор увидит его
+    в `book wanted`. При `book grant` — автоматически approved.

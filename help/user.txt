@@ -1,0 +1,12 @@
+libcore user — управление пользователями.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore user <ПОДКОМАНДА> [АРГУМЕНТЫ] [ФЛАГИ]
+
+ПОДКОМАНДЫ:
+    add <name> <password> [--role reader|moderator]   Создать юзера (host)
+    list [--role R]                                   Список юзеров
+    details <user>                                    Детали юзера
+    level <user> <reader|moderator>                   Сменить роль (host)
+
+За подробностями: libcore help user <ПОДКОМАНДА>

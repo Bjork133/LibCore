@@ -1,0 +1,11 @@
+libcore book return — вернуть копию.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book return <copyID>
+
+ОПИСАНИЕ:
+    Помечает returndate = сейчас, копия снова available.
+    Если копия не выдана — сообщит мягко.
+
+ТРЕБУЕТСЯ РОЛЬ:
+    moderator или host

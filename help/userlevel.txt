@@ -1,0 +1,8 @@
+libcore user level — сменить роль.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore user level <user> <reader|moderator>
+
+ОПИСАНИЕ:
+    Только host. Нельзя менять себе роль.
+    Нельзя назначить host (host один).

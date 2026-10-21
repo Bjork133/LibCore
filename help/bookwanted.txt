@@ -1,0 +1,10 @@
+libcore book wanted — список запросов на выдачу.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book wanted [--book ID] [--user NAME]
+
+ОПИСАНИЕ:
+    Только pending-запросы.
+
+ТРЕБУЕТСЯ РОЛЬ:
+    moderator или host

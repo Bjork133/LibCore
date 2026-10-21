@@ -1,0 +1,8 @@
+libcore logout — выйти из профиля.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore logout [--profile NAME]
+
+ОПИСАНИЕ:
+    Удаляет сессию из БД и убирает токен из профиля.
+    Без --profile: "default".

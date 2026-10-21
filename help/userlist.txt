@@ -1,0 +1,8 @@
+libcore user list — список пользователей.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore user list [--role R]
+
+ОПИСАНИЕ:
+    Reader видит только тех, у кого profile_public=1, плюс себя.
+    Moderator и host видят всех.

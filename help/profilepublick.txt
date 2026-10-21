@@ -1,0 +1,4 @@
+libcore profile public — открыть флаг.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore profile public <profile|books|stats>

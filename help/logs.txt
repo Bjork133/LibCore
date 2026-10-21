@@ -1,0 +1,16 @@
+libcore logs — логи сервера.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore logs [--level info|warn|error]
+                 [--event <event>]
+                 [--tail <N>]
+                 [--since <date>]
+
+ФЛАГИ:
+    --level <l>     Фильтр по уровню
+    --event <e>     Фильтр по событию (user.login, book.added, ...)
+    --tail <N>      Последние N записей (по умолчанию 50)
+    --since <date>  С указанной даты (по time_format)
+
+ТРЕБУЕТСЯ РОЛЬ:
+    moderator или host

@@ -1,0 +1,21 @@
+libcore book grant — выдать книгу читателю.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book grant <bookID|copyID> --to <username> [--until DATE]
+
+ОПИСАНИЕ:
+    Фиксирует выдачу: bookID или copyID → username.
+    Дата выдачи = сейчас. Дата возврата = --until,
+    или +loan_days (из settings), или бессрочно (loan_days=0).
+
+    Если указан bookID — берётся любая available-копия.
+    Если указан copyID — берётся именно эта копия.
+    Если на книгу был pending-запрос от этого юзера — approved.
+
+ТРЕБУЕТСЯ РОЛЬ:
+    moderator или host
+
+ПРИМЕРЫ:
+    libcore book grant 1 --to vasya
+    libcore book grant 101 --to vasya
+    libcore book grant 1 --to vasya --until 15.11.2026

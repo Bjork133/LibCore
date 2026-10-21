@@ -1,0 +1,4 @@
+libcore server list — список библиотек на этой машине.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore server list

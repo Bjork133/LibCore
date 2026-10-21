@@ -1,0 +1,17 @@
+libcore server init — создать библиотеку.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore server init [--name N] [--host U] [--port P]
+
+ОПИСАНИЕ:
+    Создаёт директорию библиотеки, БД, host-юзера и server.json
+    с 8-значным кодом подключения.
+
+    Если --name не указан — берётся hostname системы.
+    Если --host не указан — берётся $USER.
+    Если --port не указан — 8420.
+
+ПРИМЕРЫ:
+    libcore server init
+    libcore server init --name HomeLib --host Bjork
+    libcore server init --name Work --port 9000

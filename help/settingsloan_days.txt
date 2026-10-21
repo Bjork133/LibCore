@@ -1,0 +1,8 @@
+libcore settings loan-days — срок выдачи по умолчанию.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore settings loan-days [N]
+
+ОПИСАНИЕ:
+    N — число дней. 0 = бессрочно.
+    По умолчанию 30.

@@ -1,0 +1,4 @@
+libcore book enddate — до какого срока.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book enddate <copyID>

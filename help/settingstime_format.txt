@@ -1,0 +1,14 @@
+libcore settings time-format — формат дат.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore settings time-format [PATTERN]
+
+ОПИСАНИЕ:
+    Паттерн из символов Y (год), M (месяц), D (день).
+    Всё остальное — разделители.
+    Обязательно должны быть все три (Y, M, D).
+
+ПРИМЕРЫ:
+    libcore settings time-format YYYY-MM-DD
+    libcore settings time-format DD.MM.YYYY
+    libcore settings time-format "MM--DD++YYYY"

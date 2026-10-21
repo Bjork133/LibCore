@@ -1,0 +1,19 @@
+libcore login — войти в библиотеку.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore login [--library NAME] [--user NAME] [--password PW] [--profile NAME]
+
+ОПИСАНИЕ:
+    Открывает библиотеку на этой машине, ищет юзера,
+    проверяет пароль, создаёт сессию и сохраняет профиль
+    в ~/.config/libcore/profiles.json.
+
+    Без --library: если библиотека одна — берётся она.
+    Без --user:     спрашивает интерактивно (по умолчанию — хост).
+    Без --password: спрашивает интерактивно.
+    Без --profile:  "default".
+
+ПРИМЕРЫ:
+    libcore login
+    libcore login --library Ta --user Bjork
+    libcore login --library Ta --user Bjork --password secret

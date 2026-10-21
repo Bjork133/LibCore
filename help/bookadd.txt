@@ -1,0 +1,15 @@
+libcore book add — добавить книгу.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore book add [--title T] [--author A] [--year Y] [--isbn I] [--count N]
+
+ОПИСАНИЕ:
+    Если книга с таким же title+author уже есть — увеличивает
+    количество копий. ISBN нормализуется (без дефисов).
+    Требуется роль moderator или host.
+
+    Без флагов — спрашивает интерактивно.
+
+ПРИМЕРЫ:
+    libcore book add
+    libcore book add --title "1984" --author "Orwell" --count 3

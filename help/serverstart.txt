@@ -1,0 +1,15 @@
+libcore server start — запустить HTTP-сервер.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore server start [NAME] [--port P]
+
+ОПИСАНИЕ:
+    Поднимает HTTP/1.1 + JSON сервер на 0.0.0.0:<port>.
+    Порт берётся из --port или из server.json.
+
+    Работает в foreground: Ctrl+C — остановить.
+    В будущем будет демонизирован.
+
+ПРИМЕРЫ:
+    libcore server start
+    libcore server start Ta --port 9000
