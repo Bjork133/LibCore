@@ -12,3 +12,5 @@ out/
 .cache/
 compile_commands.json
 shrewsoftvpn-aur/
+profile.json
+shrewsoftvpn-aur/
