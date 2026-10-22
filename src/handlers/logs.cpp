@@ -1,18 +1,15 @@
 #include "handlers/logs.hpp"
 
-#include "core/library_db.hpp"
-#include "core/logs.hpp"
+#include "api/common.hpp"
+#include "api/logs.hpp"
 #include "core/profiles.hpp"
-#include "core/sessions.hpp"
 #include "core/settings.hpp"
-#include "db/database.hpp"
 #include "handlers/remote.hpp"
 #include "util/dateparse.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
-#include <ctime>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -27,9 +24,11 @@ struct Ctx {
     std::string profile_name;
     std::string library;
     std::string username;
-    std::string role;
-    long long   user_id = 0;
-    std::optional<std::string> session_token;
+    std::string token;
+    std::string mode;
+    std::optional<std::string> host;
+    std::optional<int> port;
+    std::optional<std::string> code;
 };
 
 std::optional<Ctx> load_ctx(const std::optional<std::string>& explicit_profile) {
@@ -42,25 +41,28 @@ std::optional<Ctx> load_ctx(const std::optional<std::string>& explicit_profile) 
     if (!prof) return std::nullopt;
 
     Ctx c;
-    c.profile_name  = prof->name;
-    c.library       = prof->library;
-    c.username      = prof->username;
-    c.session_token = prof->session_token;
+    c.profile_name = prof->name;
+    c.library      = prof->library;
+    c.username     = prof->username;
+    c.token        = prof->session_token.value_or("");
+    c.mode         = prof->mode;
+    c.host         = prof->host;
+    c.port         = prof->port;
+    c.code         = prof->code;
     return c;
 }
 
-bool resolve_session(Ctx& c, db::Database& database) {
-    if (!c.session_token) return false;
-    auto s = core::get_session(database, *c.session_token);
-    if (!s) return false;
-    c.role = s->role;
-    auto r = database.query_params(
-        "SELECT id FROM users WHERE username = ? LIMIT 1;",
-        { db::text_cell(c.username) }
-    );
-    if (r.empty()) return false;
-    c.user_id = db::row_int(r[0], 0);
-    return true;
+core::Profile profile_from_ctx(const Ctx& c) {
+    core::Profile p;
+    p.name          = c.profile_name;
+    p.library       = c.library;
+    p.username      = c.username;
+    p.mode          = c.mode;
+    p.host          = c.host;
+    p.port          = c.port;
+    p.code          = c.code;
+    if (!c.token.empty()) p.session_token = c.token;
+    return p;
 }
 
 struct LogOpts {
@@ -77,9 +79,8 @@ LogOpts parse_opts(const std::vector<std::string>& args) {
         const auto& a = args[i];
 
         auto take = [&](std::string_view flag) -> std::optional<std::string> {
-            if (a.size() > flag.size() && a.starts_with(flag) && a[flag.size()] == '=') {
+            if (a.size() > flag.size() && a.starts_with(flag) && a[flag.size()] == '=')
                 return a.substr(flag.size() + 1);
-            }
             if (a == flag) {
                 if (i + 1 >= args.size())
                     throw std::runtime_error(std::string("flag ") + std::string(flag) + " requires a value");
@@ -117,16 +118,6 @@ int fail(const std::string& msg, bool json_out, const char* code = "logs_error")
     return 1;
 }
 
-bool role_at_least(const std::string& role, const std::string& required) {
-    auto rank = [](const std::string& r) -> int {
-        if (r == "host") return 3;
-        if (r == "moderator") return 2;
-        if (r == "reader") return 1;
-        return 0;
-    };
-    return rank(role) >= rank(required);
-}
-
 } // namespace
 
 int cmd_logs(const std::vector<std::string>& args, bool json_out) {
@@ -134,69 +125,59 @@ int cmd_logs(const std::vector<std::string>& args, bool json_out) {
     try { o = parse_opts(args); }
     catch (const std::exception& e) { return fail(e.what(), json_out); }
 
-    auto ctx_opt = load_ctx(o.profile);
-    if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
-    auto ctx = *ctx_opt;
+    auto c_opt = load_ctx(o.profile);
+    if (!c_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
+    auto c = *c_opt;
 
-    auto prof = core::get_profile(ctx.profile_name);
-    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+    json args_j;
+    if (o.level) args_j["level"] = *o.level;
+    if (o.event) args_j["event"] = *o.event;
+    if (o.since) args_j["since"] = *o.since;
+    args_j["tail"] = o.tail;
 
-    if (prof->mode == "remote") {
-        json args_j;
-        if (o.level) args_j["level"] = *o.level;
-        if (o.event) args_j["event"] = *o.event;
-        args_j["tail"] = o.tail;
-        return remote_call(*prof, "logs", args_j, json_out);
+    json resp;
+    if (c.mode == "remote") {
+        try {
+            auto p = profile_from_ctx(c);
+            resp = remote_raw(p, "logs", args_j);
+        } catch (const std::exception& e) {
+            json j;
+            j["ok"] = false;
+            j["error"]["code"] = "network";
+            j["error"]["message"] = e.what();
+            resp = j;
+        }
+    } else {
+        resp = api::logs(c.library, c.token, o.level, o.event, o.since, o.tail);
     }
 
-    auto database = core::open_library_db(ctx.library);
-    if (!resolve_session(ctx, database))
-        return fail("session not active; run `libcore login`", json_out, "no_session");
-
-    if (!role_at_least(ctx.role, "moderator"))
-        return fail("requires moderator role or higher", json_out, "forbidden");
-
-    std::optional<long long> since_ts;
-    if (o.since) {
-        auto s = core::load_settings();
-        auto ts = util::parse_date(*o.since, s.time_format);
-        if (!ts) return fail("invalid --since date (expected " + s.time_format + ")", json_out);
-        since_ts = *ts;
+    if (!resp.value("ok", false)) {
+        std::string msg = resp["error"].value("message", "");
+        if (json_out) std::fprintf(stderr, "%s\n", resp.dump().c_str());
+        else          std::fprintf(stderr, "libcore: %s\n", msg.c_str());
+        return 1;
     }
-
-    auto entries = core::list_logs(database, o.level, o.event, since_ts, o.tail);
 
     if (json_out) {
-        json arr = json::array();
-        for (const auto& l : entries) {
-            json one;
-            one["id"]      = l.id;
-            one["ts"]      = l.ts;
-            one["level"]   = l.level;
-            one["event"]   = l.event;
-            one["actor"]   = l.actor_id ? json(*l.actor_id) : json(nullptr);
-            one["payload"] = l.payload ? json(*l.payload) : json(nullptr);
-            arr.push_back(one);
-        }
-        json j;
-        j["ok"] = true;
-        j["data"]["logs"] = arr;
-        std::printf("%s\n", j.dump().c_str());
-    } else {
-        if (entries.empty()) {
-            std::printf("Логов нет.\n");
-        } else {
-            auto s = core::load_settings();
-            for (const auto& l : entries) {
-                std::string ts = util::format_date(l.ts, s.time_format);
-                std::printf("%s  %-5s  %-20s",
-                            ts.c_str(),
-                            l.level.c_str(),
-                            l.event.c_str());
-                if (l.payload) std::printf("  %s", l.payload->c_str());
-                std::printf("\n");
-            }
-        }
+        std::printf("%s\n", resp.dump().c_str());
+        return 0;
+    }
+
+    auto arr = resp["data"]["logs"];
+    if (arr.empty()) {
+        std::printf("Логов нет.\n");
+        return 0;
+    }
+    auto s = core::load_settings();
+    for (const auto& l : arr) {
+        std::string ts = util::format_date(l["ts"].get<long long>(), s.time_format);
+        std::printf("%s  %-5s  %-20s",
+                    ts.c_str(),
+                    l["level"].get<std::string>().c_str(),
+                    l["event"].get<std::string>().c_str());
+        if (!l["payload"].is_null())
+            std::printf("  %s", l["payload"].get<std::string>().c_str());
+        std::printf("\n");
     }
     return 0;
 }

@@ -1,16 +1,13 @@
 #include "handlers/stats.hpp"
 
-#include "core/library_db.hpp"
-#include "core/loans.hpp"
+#include "api/common.hpp"
+#include "api/stats.hpp"
 #include "core/profiles.hpp"
-#include "core/sessions.hpp"
-#include "db/database.hpp"
 #include "handlers/remote.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
-#include <ctime>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -25,9 +22,11 @@ struct Ctx {
     std::string profile_name;
     std::string library;
     std::string username;
-    std::string role;
-    long long   user_id = 0;
-    std::optional<std::string> session_token;
+    std::string token;
+    std::string mode;
+    std::optional<std::string> host;
+    std::optional<int> port;
+    std::optional<std::string> code;
 };
 
 std::optional<Ctx> load_ctx(const std::optional<std::string>& explicit_profile) {
@@ -40,25 +39,28 @@ std::optional<Ctx> load_ctx(const std::optional<std::string>& explicit_profile) 
     if (!prof) return std::nullopt;
 
     Ctx c;
-    c.profile_name  = prof->name;
-    c.library       = prof->library;
-    c.username      = prof->username;
-    c.session_token = prof->session_token;
+    c.profile_name = prof->name;
+    c.library      = prof->library;
+    c.username     = prof->username;
+    c.token        = prof->session_token.value_or("");
+    c.mode         = prof->mode;
+    c.host         = prof->host;
+    c.port         = prof->port;
+    c.code         = prof->code;
     return c;
 }
 
-bool resolve_session(Ctx& c, db::Database& database) {
-    if (!c.session_token) return false;
-    auto s = core::get_session(database, *c.session_token);
-    if (!s) return false;
-    c.role = s->role;
-    auto r = database.query_params(
-        "SELECT id FROM users WHERE username = ? LIMIT 1;",
-        { db::text_cell(c.username) }
-    );
-    if (r.empty()) return false;
-    c.user_id = db::row_int(r[0], 0);
-    return true;
+core::Profile profile_from_ctx(const Ctx& c) {
+    core::Profile p;
+    p.name          = c.profile_name;
+    p.library       = c.library;
+    p.username      = c.username;
+    p.mode          = c.mode;
+    p.host          = c.host;
+    p.port          = c.port;
+    p.code          = c.code;
+    if (!c.token.empty()) p.session_token = c.token;
+    return p;
 }
 
 int fail(const std::string& msg, bool json_out, const char* code = "stats_error") {
@@ -85,9 +87,8 @@ StatOpts parse_opts(const std::vector<std::string>& args) {
         const auto& a = args[i];
 
         auto take = [&](std::string_view flag) -> std::optional<std::string> {
-            if (a.size() > flag.size() && a.starts_with(flag) && a[flag.size()] == '=') {
+            if (a.size() > flag.size() && a.starts_with(flag) && a[flag.size()] == '=')
                 return a.substr(flag.size() + 1);
-            }
             if (a == flag) {
                 if (i + 1 >= args.size())
                     throw std::runtime_error(std::string("flag ") + std::string(flag) + " requires a value");
@@ -106,75 +107,50 @@ StatOpts parse_opts(const std::vector<std::string>& args) {
 }
 
 int do_stats(const StatOpts& o, bool json_out) {
-    auto ctx_opt = load_ctx(o.profile);
-    if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
-    auto ctx = *ctx_opt;
+    auto c_opt = load_ctx(o.profile);
+    if (!c_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
+    auto c = *c_opt;
 
-    auto prof = core::get_profile(ctx.profile_name);
-    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+    json args;
+    if (!o.positional.empty()) args["user"] = o.positional[0];
 
-    if (prof->mode == "remote") {
-        json args;
-        if (!o.positional.empty()) args["user"] = o.positional[0];
-        return remote_call(*prof, "stats", args, json_out);
+    json resp;
+    if (c.mode == "remote") {
+        try {
+            auto p = profile_from_ctx(c);
+            resp = remote_raw(p, "stats", args);
+        } catch (const std::exception& e) {
+            json j;
+            j["ok"] = false;
+            j["error"]["code"] = "network";
+            j["error"]["message"] = e.what();
+            resp = j;
+        }
+    } else {
+        std::optional<std::string> user;
+        if (args.contains("user")) user = args["user"].get<std::string>();
+        resp = api::stats(c.library, c.token, user);
     }
 
-    auto database = core::open_library_db(ctx.library);
-    if (!resolve_session(ctx, database))
-        return fail("session not active; run `libcore login`", json_out, "no_session");
-
-    std::string target = o.positional.empty() ? ctx.username : o.positional[0];
-    bool is_self = (target == ctx.username);
-
-    auto ur = database.query_params(
-        "SELECT id, created_at, last_seen_at, stats_public FROM users WHERE username = ? LIMIT 1;",
-        { db::text_cell(target) }
-    );
-    if (ur.empty()) return fail("user not found: " + target, json_out, "not_found");
-
-    long long user_id      = db::row_int(ur[0], 0);
-    long long created_at   = db::row_int(ur[0], 1);
-    bool has_ls            = !db::row_is_null(ur[0], 2);
-    long long last_seen_at = has_ls ? db::row_int(ur[0], 2) : 0;
-    bool stats_public      = db::row_int(ur[0], 3) != 0;
-
-    if (!is_self && ctx.role == "reader" && !stats_public) {
-        return fail("stats are private for " + target, json_out, "forbidden");
+    if (!resp.value("ok", false)) {
+        std::string msg = resp["error"].value("message", "");
+        if (json_out) std::fprintf(stderr, "%s\n", resp.dump().c_str());
+        else          std::fprintf(stderr, "libcore: %s\n", msg.c_str());
+        return 1;
     }
-
-    auto now = static_cast<long long>(std::time(nullptr));
-    auto q = [&](const char* sql, std::vector<db::Cell> params) -> long long {
-        auto r = database.query_params(sql, params);
-        if (r.empty() || r[0].empty()) return 0;
-        return db::row_int(r[0], 0);
-    };
-
-    long long total_loans   = q("SELECT COUNT(*) FROM loans WHERE user_id = ?;", { db::int_cell(user_id) });
-    long long active_loans  = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL;", { db::int_cell(user_id) });
-    long long returned      = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NOT NULL;", { db::int_cell(user_id) });
-    long long overdue       = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL AND enddate IS NOT NULL AND enddate < ?;", { db::int_cell(user_id), db::int_cell(now) });
-    long long requests_pend = q("SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending';", { db::int_cell(user_id) });
 
     if (json_out) {
-        json j;
-        j["ok"] = true;
-        j["data"]["username"]         = target;
-        j["data"]["created_at"]       = created_at;
-        j["data"]["last_seen_at"]     = has_ls ? json(last_seen_at) : json(nullptr);
-        j["data"]["total_loans"]      = total_loans;
-        j["data"]["active_loans"]     = active_loans;
-        j["data"]["returned"]         = returned;
-        j["data"]["overdue"]          = overdue;
-        j["data"]["requests_pending"] = requests_pend;
-        std::printf("%s\n", j.dump().c_str());
-    } else {
-        std::printf("Статистика %s:\n", target.c_str());
-        std::printf("  всего выдач:    %lld\n", total_loans);
-        std::printf("  на руках:       %lld\n", active_loans);
-        std::printf("  возвращено:     %lld\n", returned);
-        std::printf("  просрочено:     %lld\n", overdue);
-        std::printf("  запросов:       %lld\n", requests_pend);
+        std::printf("%s\n", resp.dump().c_str());
+        return 0;
     }
+
+    auto d = resp["data"];
+    std::printf("Статистика %s:\n", d["username"].get<std::string>().c_str());
+    std::printf("  всего выдач:    %lld\n", d["total_loans"].get<long long>());
+    std::printf("  на руках:       %lld\n", d["active_loans"].get<long long>());
+    std::printf("  возвращено:     %lld\n", d["returned"].get<long long>());
+    std::printf("  просрочено:     %lld\n", d["overdue"].get<long long>());
+    std::printf("  запросов:       %lld\n", d["requests_pending"].get<long long>());
     return 0;
 }
 

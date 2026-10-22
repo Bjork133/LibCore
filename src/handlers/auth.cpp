@@ -1,18 +1,14 @@
+#include "core/server_meta.hpp"
 #include "handlers/auth.hpp"
 
-#include "core/library_db.hpp"
-#include "core/logs.hpp"
+#include "api/auth.hpp"
+#include "api/common.hpp"
 #include "core/profiles.hpp"
-#include "core/server_meta.hpp"
-#include "core/sessions.hpp"
-#include "db/database.hpp"
 #include "net/http_client.hpp"
-#include "util/crypto.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
-#include <ctime>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -137,71 +133,63 @@ std::string pick_library(const std::optional<std::string>& explicit_name) {
     throw std::runtime_error("multiple libraries — specify --library");
 }
 
-// --- login local (как было) ---
+// --- общий вывод login ---
+
+int print_login_result(const json& resp, const std::string& profile_name, bool json_out) {
+    if (!resp.value("ok", false)) {
+        std::string code = resp["error"].value("code", "auth_error");
+        std::string msg  = resp["error"].value("message", "");
+        if (json_out) {
+            std::fprintf(stderr, "%s\n", resp.dump().c_str());
+        } else {
+            std::fprintf(stderr, "libcore: %s\n", msg.c_str());
+        }
+        return 1;
+    }
+
+    if (json_out) {
+        json j = resp;
+        j["data"]["profile"] = profile_name;
+        std::printf("%s\n", j.dump().c_str());
+    } else {
+        auto d = resp["data"];
+        std::printf("Вошли как %s (%s).\n",
+                    d["username"].get<std::string>().c_str(),
+                    d["role"].get<std::string>().c_str());
+        std::printf("Профиль: %s\n", profile_name.c_str());
+    }
+    return 0;
+}
+
+// --- login local ---
 
 int do_login_local(const AuthOpts& o, bool json_out) {
     std::string lib_name;
     try { lib_name = pick_library(o.library); }
     catch (const std::exception& e) { return fail(e.what(), json_out); }
 
-    auto meta = core::read_meta(lib_name);
-    if (!meta) return fail("cannot read server.json for " + lib_name, json_out);
-
     std::string username = o.user.value_or("");
     if (username.empty()) {
         if (json_out) return fail("--user is required in --json mode", json_out);
-        std::fprintf(stderr, "Имя пользователя [%s]: ", meta->host.c_str());
+        std::fprintf(stderr, "Имя пользователя: ");
         std::fflush(stderr);
         std::getline(std::cin, username);
-        if (username.empty()) username = meta->host;
     }
+    if (username.empty()) return fail("username is empty", json_out);
 
     std::string password;
-    if (o.password) {
-        password = *o.password;
-    } else if (json_out) {
-        return fail("--password is required in --json mode", json_out);
-    } else {
-        password = prompt_password("Пароль: ");
+    if (o.password) password = *o.password;
+    else if (json_out) return fail("--password is required in --json mode", json_out);
+    else password = prompt_password("Пароль: ");
+
+    auto resp = api::login(lib_name, username, password);
+
+    if (!resp.value("ok", false)) {
+        return print_login_result(resp, "", json_out);
     }
-
-    auto database = core::open_library_db(lib_name);
-
-    auto r = database.query_params(
-        "SELECT id, pw_hash, role FROM users WHERE username = ?;",
-        { db::text_cell(username) }
-    );
-    if (r.empty()) {
-        core::log_warn(database, "auth.failed", std::nullopt,
-                       std::string("{\"username\":\"") + username +
-                       "\",\"reason\":\"user_not_found\"}");
-        return fail("user not found: " + username, json_out, "user_not_found");
-    }
-
-    long long user_id = db::row_int(r[0], 0);
-    std::string pw_hash = db::row_text(r[0], 1);
-    std::string role    = db::row_text(r[0], 2);
-
-    if (!util::verify_password(password, pw_hash)) {
-        core::log_warn(database, "auth.failed", user_id,
-                       std::string("{\"username\":\"") + username +
-                       "\",\"reason\":\"invalid_password\"}");
-        return fail("invalid password", json_out, "invalid_password");
-    }
-
-    core::delete_user_sessions(database, user_id);
-    auto token = core::create_session(database, user_id, 30LL * 24 * 3600);
-
-    database.exec_params(
-        "UPDATE users SET last_seen_at = ? WHERE id = ?;",
-        { db::int_cell(static_cast<long long>(std::time(nullptr))),
-          db::int_cell(user_id) }
-    );
-
-    core::log_info(database, "user.login", user_id,
-                   std::string("{\"username\":\"") + username + "\"}");
 
     std::string profile_name = o.profile.value_or("default");
+    std::string token = resp["data"].value("token", "");
 
     core::Profile p;
     p.name          = profile_name;
@@ -211,27 +199,12 @@ int do_login_local(const AuthOpts& o, bool json_out) {
     p.session_token = token;
     core::put_profile(p);
 
-    if (json_out) {
-        json j;
-        j["ok"] = true;
-        j["data"]["profile"]  = profile_name;
-        j["data"]["library"]  = lib_name;
-        j["data"]["username"] = username;
-        j["data"]["role"]     = role;
-        j["data"]["token"]    = token;
-        std::printf("%s\n", j.dump().c_str());
-    } else {
-        std::printf("Вошли как %s (%s) в библиотеку %s.\n",
-                    username.c_str(), role.c_str(), lib_name.c_str());
-        std::printf("Профиль: %s\n", profile_name.c_str());
-    }
-    return 0;
+    return print_login_result(resp, profile_name, json_out);
 }
 
 // --- login remote ---
 
 int do_login_remote(const AuthOpts& o, bool json_out) {
-    // host / port / code / user / password — интерактив, если не заданы
     std::string host = o.host.value_or("");
     if (host.empty()) {
         if (json_out) return fail("--host is required in --json mode", json_out);
@@ -244,10 +217,7 @@ int do_login_remote(const AuthOpts& o, bool json_out) {
         if (json_out) return fail("--port is required in --json mode", json_out);
         std::string s = prompt_line("Порт [8420]: ");
         if (s.empty()) port = 8420;
-        else {
-            try { port = std::stoi(s); }
-            catch (...) { return fail("invalid port", json_out); }
-        }
+        else { try { port = std::stoi(s); } catch (...) { return fail("invalid port", json_out); } }
     }
 
     std::string code = o.code.value_or("");
@@ -265,32 +235,26 @@ int do_login_remote(const AuthOpts& o, bool json_out) {
     if (username.empty()) return fail("username is empty", json_out);
 
     std::string password;
-    if (o.password) {
-        password = *o.password;
-    } else if (json_out) {
-        return fail("--password is required in --json mode", json_out);
-    } else {
-        password = prompt_password("Пароль: ");
-    }
+    if (o.password) password = *o.password;
+    else if (json_out) return fail("--password is required in --json mode", json_out);
+    else password = prompt_password("Пароль: ");
+
     if (password.empty()) return fail("password is empty", json_out);
 
     try {
         net::HttpClient cli(host, port);
 
-        // 1. Пробуем login
         json login_args;
         login_args["username"] = username;
         login_args["password"] = password;
 
         json resp = cli.call("login", login_args);
 
-        std::string role;
-        std::string token;
+        std::string role, token;
 
         if (!resp.value("ok", false)) {
             std::string err_code = resp["error"].value("code", "");
             if (err_code == "user_not_found") {
-                // 2. Пробуем register
                 json reg_args;
                 reg_args["code"]     = code;
                 reg_args["username"] = username;
@@ -316,7 +280,7 @@ int do_login_remote(const AuthOpts& o, bool json_out) {
 
         core::Profile p;
         p.name          = profile_name;
-        p.library       = "";          // для remote не используется
+        p.library       = "";
         p.username      = username;
         p.mode          = "remote";
         p.host          = host;
@@ -346,7 +310,7 @@ int do_login_remote(const AuthOpts& o, bool json_out) {
     }
 }
 
-// --- logout (как было) ---
+// --- logout ---
 
 int do_logout(const AuthOpts& o, bool json_out) {
     std::string profile_name = o.profile.value_or("default");
@@ -356,11 +320,9 @@ int do_logout(const AuthOpts& o, bool json_out) {
 
     if (prof->session_token && prof->mode == "local" && !prof->library.empty()) {
         try {
-            auto database = core::open_library_db(prof->library);
-            core::delete_session(database, *prof->session_token);
+            api::logout(prof->library, *prof->session_token);
         } catch (...) {}
     }
-    // для remote — просто забываем токен (сервер сам истечёт по TTL)
 
     auto p2 = *prof;
     p2.session_token.reset();
@@ -396,7 +358,6 @@ int do_whoami(const AuthOpts& o, bool json_out) {
     bool valid = false;
 
     if (prof->mode == "remote") {
-        // Спросим сервер
         if (prof->host && prof->port && prof->session_token) {
             try {
                 net::HttpClient cli(*prof->host, *prof->port);
@@ -409,11 +370,10 @@ int do_whoami(const AuthOpts& o, bool json_out) {
         }
     } else if (prof->session_token && !prof->library.empty()) {
         try {
-            auto database = core::open_library_db(prof->library);
-            auto s = core::get_session(database, *prof->session_token);
-            if (s) {
+            auto resp = api::whoami(prof->library, *prof->session_token);
+            if (resp.value("ok", false)) {
+                role  = resp["data"].value("role", "?");
                 valid = true;
-                role  = s->role;
             }
         } catch (...) {}
     }

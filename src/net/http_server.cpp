@@ -1,5 +1,6 @@
 #include "net/http_server.hpp"
 
+#include "api/common.hpp"
 #include "net/rpc.hpp"
 
 #include <httplib.h>
@@ -42,7 +43,7 @@ void HttpServer::start() {
             request = json::parse(req.body);
         } catch (...) {
             res.status = 400;
-            res.set_content(rpc_error("bad_json", "invalid JSON").dump(),
+            res.set_content(api::err("bad_json", "invalid JSON").dump(),
                             "application/json");
             return;
         }
@@ -51,13 +52,12 @@ void HttpServer::start() {
         try {
             response = dispatch_rpc(library_, request);
         } catch (const std::exception& e) {
-            response = rpc_error("internal", e.what());
+            response = api::err("internal", e.what());
         }
 
         res.set_content(response.dump(), "application/json");
     });
 
-    // GET / — простая проверка живости
     srv->Get("/", [this](const httplib::Request&, httplib::Response& res) {
         json j;
         j["library"] = library_;

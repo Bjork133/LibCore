@@ -1,9 +1,7 @@
 #pragma once
 
-#include <string>
-#include <string_view>
-
 #include <nlohmann/json.hpp>
+#include <string>
 
 namespace libcore::net {
 
@@ -16,9 +14,5 @@ using json = nlohmann::json;
 // Возвращает JSON-ответ: { "ok": true, "data": ... } или
 //                         { "ok": false, "error": { "code": "...", "message": "..." } }
 json dispatch_rpc(const std::string& library, const json& request);
-
-// Вспомогательные ответы.
-json rpc_ok(json data = json::object());
-json rpc_error(const std::string& code, const std::string& message);
 
 } // namespace libcore::net
