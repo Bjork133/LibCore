@@ -4,6 +4,7 @@
 #include "core/profiles.hpp"
 #include "core/sessions.hpp"
 #include "db/database.hpp"
+#include "handlers/remote.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -103,16 +104,6 @@ int fail(const std::string& msg, bool json_out, const char* code = "profile_erro
     return 1;
 }
 
-bool role_at_least(const std::string& role, const std::string& required) {
-    auto rank = [](const std::string& r) -> int {
-        if (r == "host") return 3;
-        if (r == "moderator") return 2;
-        if (r == "reader") return 1;
-        return 0;
-    };
-    return rank(role) >= rank(required);
-}
-
 // --- profile show ---
 
 int do_show(const ProfileOpts& o, bool json_out) {
@@ -120,13 +111,20 @@ int do_show(const ProfileOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) args["user"] = o.positional[0];
+        return remote_call(*prof, "profile.show", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
 
     std::string target = o.positional.empty() ? ctx.username : o.positional[0];
-    bool is_self = (target == ctx.username);
-    bool is_mod = role_at_least(ctx.role, "moderator");
 
     auto r = database.query_params(
         "SELECT profile_public, books_public, stats_public "
@@ -153,11 +151,10 @@ int do_show(const ProfileOpts& o, bool json_out) {
         std::printf("  books:   %s\n", bp ? "public" : "private");
         std::printf("  stats:   %s\n", sp ? "public" : "private");
     }
-    (void)is_self; (void)is_mod;
     return 0;
 }
 
-// --- set flag ---
+// --- set privacy ---
 
 int set_privacy(const ProfileOpts& o, bool json_out,
                 const std::string& field, bool value)
@@ -165,6 +162,16 @@ int set_privacy(const ProfileOpts& o, bool json_out,
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        args["field"] = field;
+        args["value"] = value;
+        return remote_call(*prof, "profile.set", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -196,11 +203,100 @@ int set_privacy(const ProfileOpts& o, bool json_out,
     return 0;
 }
 
+// --- profile use ---
+
+int do_use(const ProfileOpts& o, bool json_out) {
+    auto all = core::load_profiles();
+
+    if (o.positional.empty()) {
+        if (all.default_name.empty()) {
+            return fail("no default profile; use `profile use <name>`", json_out, "no_default");
+        }
+        if (json_out) {
+            json j;
+            j["ok"] = true;
+            j["data"]["default"] = all.default_name;
+            std::printf("%s\n", j.dump().c_str());
+        } else {
+            std::printf("%s\n", all.default_name.c_str());
+        }
+        return 0;
+    }
+
+    std::string name = o.positional[0];
+    bool found = false;
+    for (const auto& p : all.all) {
+        if (p.name == name) { found = true; break; }
+    }
+    if (!found) return fail("profile not found: " + name, json_out, "not_found");
+
+    core::set_default_profile(name);
+
+    if (json_out) {
+        json j;
+        j["ok"] = true;
+        j["data"]["default"] = name;
+        std::printf("%s\n", j.dump().c_str());
+    } else {
+        std::printf("Активный профиль: %s\n", name.c_str());
+    }
+    return 0;
+}
+
+// --- profile list ---
+
+int do_list(bool json_out) {
+    auto all = core::load_profiles();
+
+    if (json_out) {
+        json arr = json::array();
+        for (const auto& p : all.all) {
+            json one;
+            one["name"]   = p.name;
+            one["mode"]   = p.mode;
+            one["user"]   = p.username;
+            one["default"] = (p.name == all.default_name);
+            if (p.mode == "remote") {
+                one["host"] = p.host ? json(*p.host) : json(nullptr);
+                one["port"] = p.port ? json(*p.port) : json(nullptr);
+            } else {
+                one["library"] = p.library;
+            }
+            arr.push_back(one);
+        }
+        json j;
+        j["ok"] = true;
+        j["data"]["profiles"] = arr;
+        j["data"]["default"]  = all.default_name;
+        std::printf("%s\n", j.dump().c_str());
+    } else {
+        if (all.all.empty()) {
+            std::printf("Профилей нет.\n");
+            return 0;
+        }
+        for (const auto& p : all.all) {
+            std::string marker = (p.name == all.default_name) ? " *" : "";
+            if (p.mode == "remote") {
+                std::printf("  %s%s  (remote: %s:%d, %s)\n",
+                            p.name.c_str(), marker.c_str(),
+                            p.host ? p.host->c_str() : "?",
+                            p.port.value_or(0),
+                            p.username.c_str());
+            } else {
+                std::printf("  %s%s  (local: %s, %s)\n",
+                            p.name.c_str(), marker.c_str(),
+                            p.library.c_str(), p.username.c_str());
+            }
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int cmd_profile(const std::vector<std::string>& args, bool json_out) {
     if (args.empty()) {
-        return fail("usage: libcore profile <show|public|private>", json_out);
+        return fail("usage: libcore profile <show|public|private|use|list>", json_out);
     }
 
     std::string sub = args[0];
@@ -211,6 +307,8 @@ int cmd_profile(const std::vector<std::string>& args, bool json_out) {
     catch (const std::exception& e) { return fail(e.what(), json_out); }
 
     if (sub == "show") return do_show(o, json_out);
+    if (sub == "use")  return do_use(o, json_out);
+    if (sub == "list") return do_list(json_out);
 
     if (sub == "public" || sub == "private") {
         if (o.positional.empty()) {

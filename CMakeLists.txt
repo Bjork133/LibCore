@@ -30,7 +30,7 @@ target_compile_options(sqlite3 PRIVATE -w)
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE third_party/json)
 
-# --- scrypt (enceeper, только примитивы) ---
+# --- scrypt ---
 add_library(scrypt STATIC
     third_party/scrypt/lib/scrypt_lib.c
     third_party/scrypt/lib/pbkdf2.c
@@ -41,23 +41,24 @@ add_library(scrypt STATIC
 target_include_directories(scrypt PUBLIC third_party/scrypt)
 target_compile_options(scrypt PRIVATE -w -fno-strict-aliasing)
 
-# --- cpp-httplib ---
+# --- httplib ---
 add_library(httplib INTERFACE)
 target_include_directories(httplib INTERFACE third_party/httplib)
 
-# --- Источники (C + C++) ---
+# --- libcore_lib: всё, кроме main.cpp ---
 file(GLOB_RECURSE LIBCORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_SOURCE_DIR}/src/*.c"
 )
+list(REMOVE_ITEM LIBCORE_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
-add_executable(libcore ${LIBCORE_SOURCES})
+add_library(libcore_lib STATIC ${LIBCORE_SOURCES})
 
-target_include_directories(libcore PRIVATE
+target_include_directories(libcore_lib PUBLIC
     "${CMAKE_SOURCE_DIR}/src"
 )
 
-target_link_libraries(libcore PRIVATE
+target_link_libraries(libcore_lib PUBLIC
     sqlite3
     nlohmann_json
     scrypt
@@ -120,15 +121,21 @@ file(APPEND "${HELP_CPP}"
 "}\n"
 )
 
-target_sources(libcore PRIVATE "${HELP_CPP}")
-target_include_directories(libcore PRIVATE "${HELP_GEN_DIR}")
+target_sources(libcore_lib PRIVATE "${HELP_CPP}")
+target_include_directories(libcore_lib PRIVATE "${HELP_GEN_DIR}")
 
 # --- Compile-time defines ---
-target_compile_definitions(libcore PRIVATE
+target_compile_definitions(libcore_lib PRIVATE
     LIBCORE_HELP_DIR="${CMAKE_INSTALL_FULL_DATADIR}/libcore/help"
     LIBCORE_VERSION="${PROJECT_VERSION}"
 )
 
+# --- libcore executable ---
+add_executable(libcore src/main.cpp)
+target_link_libraries(libcore PRIVATE libcore_lib)
+
 # --- Install ---
 install(TARGETS libcore RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS libcore_lib ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libcore FILES_MATCHING PATTERN "*.hpp")
 install(DIRECTORY help/ DESTINATION ${CMAKE_INSTALL_DATADIR}/libcore/help)

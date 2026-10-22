@@ -1,9 +1,11 @@
-libcore profile — профиль и приватность.
+libcore profile — профили и приватность.
 
 ИСПОЛЬЗОВАНИЕ:
-    libcore profile <show|public|private> [ЧТО]
+    libcore profile <ПОДКОМАНДА> [АРГУМЕНТЫ]
 
 ПОДКОМАНДЫ:
-    show [<user>]                     Показать флаги
-    public <profile|books|stats>      Открыть
-    private <profile|books|stats>     Закрыть
+    show [<user>]                     Показать флаги приватности
+    public <profile|books|stats>      Открыть флаг
+    private <profile|books|stats>     Закрыть флаг
+    use [<name>]                      Сделать профиль активным
+    list                              Список всех профилей

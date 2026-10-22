@@ -1,15 +1,16 @@
 #include "handlers/book.hpp"
-#include "core/logs.hpp"
 
 #include "core/books.hpp"
 #include "core/library_db.hpp"
 #include "core/loans.hpp"
+#include "core/logs.hpp"
 #include "core/profiles.hpp"
 #include "core/requests.hpp"
 #include "core/server_meta.hpp"
 #include "core/sessions.hpp"
 #include "core/settings.hpp"
 #include "db/database.hpp"
+#include "handlers/remote.hpp"
 #include "util/dateparse.hpp"
 
 #include <nlohmann/json.hpp>
@@ -166,7 +167,6 @@ bool role_at_least(const std::string& role, const std::string& required) {
     return rank(role) >= rank(required);
 }
 
-// Форматирование даты по настройкам.
 std::string fmt_date(long long t) {
     auto s = core::load_settings();
     return util::format_date(t, s.time_format);
@@ -178,6 +178,22 @@ int do_add(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        if (o.title.value_or("").empty() || o.author.value_or("").empty()) {
+            return fail("--title and --author are required for remote", json_out);
+        }
+        json args;
+        args["title"]  = *o.title;
+        args["author"] = *o.author;
+        if (o.year) args["year"] = *o.year;
+        if (o.isbn) args["isbn"] = *o.isbn;
+        args["count"]  = o.count.value_or(1);
+        return remote_call(*prof, "book.add", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -241,6 +257,7 @@ int do_add(const BookOpts& o, bool json_out) {
 
     auto res = core::add_book(database, title, author, year, isbn, ctx.user_id);
     auto copies = core::add_copies(database, res.book_id, count);
+
     core::log_info(database, "book.added", ctx.user_id,
                    std::string("{\"book_id\":") + std::to_string(res.book_id) +
                    ",\"title\":\"" + title + "\"}");
@@ -278,6 +295,24 @@ int do_info(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (o.id) {
+            args["id"] = *o.id;
+        } else {
+            std::string q;
+            for (std::size_t i = 0; i < o.positional.size(); ++i) {
+                if (i) q += " ";
+                q += o.positional[i];
+            }
+            args["query"] = q;
+        }
+        return remote_call(*prof, "book.info", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
 
@@ -366,6 +401,15 @@ int do_list(const BookOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        args["available"] = o.available;
+        return remote_call(*prof, "book.list", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     auto books = core::list_books(database);
 
@@ -412,10 +456,25 @@ int do_list(const BookOpts& o, bool json_out) {
 }
 
 // --- book grant ---
+
 int do_grant(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["book_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid ID", json_out); }
+        }
+        if (o.to) args["to"] = *o.to;
+        if (o.until) args["until"] = *o.until;
+        return remote_call(*prof, "book.grant", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -435,10 +494,6 @@ int do_grant(const BookOpts& o, bool json_out) {
     try { arg_id = std::stoll(o.positional[0]); }
     catch (...) { return fail("invalid ID: " + o.positional[0], json_out); }
 
-    // Различить bookID и copyID:
-    //   1. Если ID есть в books — это book.
-    //   2. Иначе если ID есть в copies — это copy.
-    //   3. Иначе — ошибка.
     long long book_id = 0;
     long long forced_copy = 0;
 
@@ -455,7 +510,6 @@ int do_grant(const BookOpts& o, bool json_out) {
         forced_copy = arg_id;
     }
 
-    // Найти юзера
     auto ur = database.query_params(
         "SELECT id FROM users WHERE username = ? LIMIT 1;",
         { db::text_cell(*o.to) }
@@ -463,7 +517,6 @@ int do_grant(const BookOpts& o, bool json_out) {
     if (ur.empty()) return fail("user not found: " + *o.to, json_out, "user_not_found");
     long long user_id = db::row_int(ur[0], 0);
 
-    // --until: парсим через time_format
     std::optional<long long> until_ts;
     if (o.until && !o.until->empty()) {
         auto s = core::load_settings();
@@ -472,7 +525,6 @@ int do_grant(const BookOpts& o, bool json_out) {
         until_ts = *ts;
     }
 
-    // Если задан forced_copy — проверим, что она available.
     if (forced_copy) {
         auto status_r = database.query_params(
             "SELECT status FROM copies WHERE id = ? LIMIT 1;",
@@ -492,7 +544,6 @@ int do_grant(const BookOpts& o, bool json_out) {
     try {
         long long loan_id;
         if (forced_copy) {
-            // Прямая выдача конкретной копии.
             auto now = static_cast<long long>(std::time(nullptr));
             std::optional<long long> enddate = until_ts;
             if (!enddate) {
@@ -533,7 +584,6 @@ int do_grant(const BookOpts& o, bool json_out) {
             loan_id = core::grant_loan(database, book_id, user_id, until_ts);
         }
 
-        // Получим информацию для вывода
         auto active = core::active_loans_for_book(database, book_id);
         std::optional<long long> actual_enddate;
         long long actual_copy = 0;
@@ -545,7 +595,6 @@ int do_grant(const BookOpts& o, bool json_out) {
             }
         }
 
-        // Логируем выдачу
         core::log_info(database, "book.granted", ctx.user_id,
                        std::string("{\"book_id\":") + std::to_string(book_id) +
                        ",\"to\":\"" + *o.to + "\"}");
@@ -584,6 +633,18 @@ int do_return(const BookOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["copy_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid copy ID", json_out); }
+        }
+        return remote_call(*prof, "book.return", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
@@ -601,7 +662,6 @@ int do_return(const BookOpts& o, bool json_out) {
 
     bool ok = core::return_loan(database, copy_id);
     if (!ok) {
-        // мягкое сообщение
         if (json_out) {
             json j;
             j["ok"] = false;
@@ -635,6 +695,18 @@ int do_owner(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["book_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid book ID", json_out); }
+        }
+        return remote_call(*prof, "book.owner", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
 
@@ -697,6 +769,18 @@ int do_givedate(const BookOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["copy_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid copy ID", json_out); }
+        }
+        return remote_call(*prof, "book.givedate", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
 
     if (o.positional.empty()) return fail("usage: libcore book givedate <copyID>", json_out);
@@ -725,6 +809,18 @@ int do_enddate(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["copy_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid copy ID", json_out); }
+        }
+        return remote_call(*prof, "book.enddate", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
 
@@ -755,6 +851,18 @@ int do_request(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) {
+            try { args["book_id"] = std::stoll(o.positional[0]); }
+            catch (...) { return fail("invalid book ID", json_out); }
+        }
+        return remote_call(*prof, "book.request", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -796,6 +904,16 @@ int do_wanted(const BookOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (o.id) args["book_id"] = *o.id;
+        if (o.user_filter) args["user"] = *o.user_filter;
+        return remote_call(*prof, "book.wanted", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))

@@ -1,10 +1,11 @@
 #include "handlers/user.hpp"
-#include "core/logs.hpp"
 
 #include "core/library_db.hpp"
+#include "core/logs.hpp"
 #include "core/profiles.hpp"
 #include "core/sessions.hpp"
 #include "db/database.hpp"
+#include "handlers/remote.hpp"
 #include "util/crypto.hpp"
 
 #include <nlohmann/json.hpp>
@@ -21,8 +22,6 @@ namespace libcore::handlers {
 using json = nlohmann::json;
 
 namespace {
-
-// --- контекст ---
 
 struct Ctx {
     std::string profile_name;
@@ -64,8 +63,6 @@ bool resolve_session(Ctx& c, db::Database& database) {
     return true;
 }
 
-// --- парсинг ---
-
 struct UserOpts {
     std::vector<std::string> positional;
     std::optional<std::string> profile;
@@ -99,8 +96,6 @@ UserOpts parse_opts(const std::vector<std::string>& args) {
     return o;
 }
 
-// --- ошибки ---
-
 int fail(const std::string& msg, bool json_out, const char* code = "user_error") {
     if (json_out) {
         json j;
@@ -131,6 +126,18 @@ int do_add(const UserOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        if (o.positional.size() < 2) return fail("usage: user add <name> <password> [--role R]", json_out);
+        json args;
+        args["username"] = o.positional[0];
+        args["password"] = o.positional[1];
+        if (o.role) args["role"] = *o.role;
+        return remote_call(*prof, "user.add", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
@@ -149,11 +156,9 @@ int do_add(const UserOpts& o, bool json_out) {
     if (role != "reader" && role != "moderator") {
         return fail("role must be 'reader' or 'moderator'", json_out);
     }
-
     if (username.empty()) return fail("username is empty", json_out);
     if (password.empty()) return fail("password is empty", json_out);
 
-    // Уже есть такой?
     auto existing = database.query_params(
         "SELECT id FROM users WHERE username = ? LIMIT 1;",
         { db::text_cell(username) }
@@ -177,9 +182,11 @@ int do_add(const UserOpts& o, bool json_out) {
     );
 
     long long new_id = database.last_insert_rowid();
+
     core::log_info(database, "user.added", ctx.user_id,
                    std::string("{\"username\":\"") + username +
-                   ",\"role\":\"" + role + "\"}");
+                   "\",\"role\":\"" + role + "\"}");
+
     if (json_out) {
         json j;
         j["ok"] = true;
@@ -201,14 +208,20 @@ int do_list(const UserOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (o.role) args["role"] = *o.role;
+        return remote_call(*prof, "user.list", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
 
-    bool is_mod = role_at_least(ctx.role, "moderator");
     bool is_reader = (ctx.role == "reader");
-
-    // Фильтр по --role
     std::string role_filter = o.role.value_or("");
 
     std::vector<db::Row> rows;
@@ -227,7 +240,6 @@ int do_list(const UserOpts& o, bool json_out) {
         );
     }
 
-    // Фильтр для reader'ов: только profile_public=1 или себя.
     if (is_reader) {
         std::vector<db::Row> filtered;
         for (const auto& r : rows) {
@@ -273,6 +285,16 @@ int do_details(const UserOpts& o, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        if (o.positional.empty()) return fail("usage: user details <user>", json_out);
+        json args;
+        args["user"] = o.positional[0];
+        return remote_call(*prof, "user.details", args, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
@@ -292,10 +314,8 @@ int do_details(const UserOpts& o, bool json_out) {
 
     auto& row = r[0];
     bool is_self = (target == ctx.username);
-    bool is_mod = role_at_least(ctx.role, "moderator");
     bool profile_pub = db::row_int(row, 5) != 0;
 
-    // reader видит детали только если profile_public или это он сам
     if (ctx.role == "reader" && !is_self && !profile_pub) {
         return fail("profile is private: " + target, json_out, "forbidden");
     }
@@ -327,7 +347,6 @@ int do_details(const UserOpts& o, bool json_out) {
         std::printf("    books:   %s\n", db::row_int(row, 6) ? "public" : "private");
         std::printf("    stats:   %s\n", db::row_int(row, 7) ? "public" : "private");
     }
-    (void)is_mod; (void)is_self;
     return 0;
 }
 
@@ -337,6 +356,17 @@ int do_level(const UserOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        if (o.positional.size() < 2) return fail("usage: user level <user> <reader|moderator>", json_out);
+        json args;
+        args["user"] = o.positional[0];
+        args["role"] = o.positional[1];
+        return remote_call(*prof, "user.level", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -359,7 +389,6 @@ int do_level(const UserOpts& o, bool json_out) {
         return fail("cannot change your own role", json_out, "self_change");
     }
 
-    // Проверим, что target существует и не host
     auto r = database.query_params(
         "SELECT id, role FROM users WHERE username = ? LIMIT 1;",
         { db::text_cell(target) }

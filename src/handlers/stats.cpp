@@ -5,6 +5,7 @@
 #include "core/profiles.hpp"
 #include "core/sessions.hpp"
 #include "db/database.hpp"
+#include "handlers/remote.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -73,16 +74,6 @@ int fail(const std::string& msg, bool json_out, const char* code = "stats_error"
     return 1;
 }
 
-bool role_at_least(const std::string& role, const std::string& required) {
-    auto rank = [](const std::string& r) -> int {
-        if (r == "host") return 3;
-        if (r == "moderator") return 2;
-        if (r == "reader") return 1;
-        return 0;
-    };
-    return rank(role) >= rank(required);
-}
-
 struct StatOpts {
     std::vector<std::string> positional;
     std::optional<std::string> profile;
@@ -114,12 +105,19 @@ StatOpts parse_opts(const std::vector<std::string>& args) {
     return o;
 }
 
-// --- stats ---
-
 int do_stats(const StatOpts& o, bool json_out) {
     auto ctx_opt = load_ctx(o.profile);
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
+
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args;
+        if (!o.positional.empty()) args["user"] = o.positional[0];
+        return remote_call(*prof, "stats", args, json_out);
+    }
 
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
@@ -140,13 +138,11 @@ int do_stats(const StatOpts& o, bool json_out) {
     long long last_seen_at = has_ls ? db::row_int(ur[0], 2) : 0;
     bool stats_public      = db::row_int(ur[0], 3) != 0;
 
-    // Проверка приватности
     if (!is_self && ctx.role == "reader" && !stats_public) {
         return fail("stats are private for " + target, json_out, "forbidden");
     }
 
     auto now = static_cast<long long>(std::time(nullptr));
-
     auto q = [&](const char* sql, std::vector<db::Cell> params) -> long long {
         auto r = database.query_params(sql, params);
         if (r.empty() || r[0].empty()) return 0;
@@ -154,25 +150,21 @@ int do_stats(const StatOpts& o, bool json_out) {
     };
 
     long long total_loans   = q("SELECT COUNT(*) FROM loans WHERE user_id = ?;", { db::int_cell(user_id) });
-    long long active_loans  = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL;",
-                                { db::int_cell(user_id) });
-    long long returned      = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NOT NULL;",
-                                { db::int_cell(user_id) });
-    long long overdue       = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL AND enddate IS NOT NULL AND enddate < ?;",
-                                { db::int_cell(user_id), db::int_cell(now) });
-    long long requests_pend = q("SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending';",
-                                { db::int_cell(user_id) });
+    long long active_loans  = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL;", { db::int_cell(user_id) });
+    long long returned      = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NOT NULL;", { db::int_cell(user_id) });
+    long long overdue       = q("SELECT COUNT(*) FROM loans WHERE user_id = ? AND returndate IS NULL AND enddate IS NOT NULL AND enddate < ?;", { db::int_cell(user_id), db::int_cell(now) });
+    long long requests_pend = q("SELECT COUNT(*) FROM requests WHERE user_id = ? AND status = 'pending';", { db::int_cell(user_id) });
 
     if (json_out) {
         json j;
         j["ok"] = true;
-        j["data"]["username"]        = target;
-        j["data"]["created_at"]      = created_at;
-        j["data"]["last_seen_at"]    = has_ls ? json(last_seen_at) : json(nullptr);
-        j["data"]["total_loans"]     = total_loans;
-        j["data"]["active_loans"]    = active_loans;
-        j["data"]["returned"]        = returned;
-        j["data"]["overdue"]         = overdue;
+        j["data"]["username"]         = target;
+        j["data"]["created_at"]       = created_at;
+        j["data"]["last_seen_at"]     = has_ls ? json(last_seen_at) : json(nullptr);
+        j["data"]["total_loans"]      = total_loans;
+        j["data"]["active_loans"]     = active_loans;
+        j["data"]["returned"]         = returned;
+        j["data"]["overdue"]          = overdue;
         j["data"]["requests_pending"] = requests_pend;
         std::printf("%s\n", j.dump().c_str());
     } else {

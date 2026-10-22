@@ -6,6 +6,7 @@
 #include "core/sessions.hpp"
 #include "core/settings.hpp"
 #include "db/database.hpp"
+#include "handlers/remote.hpp"
 #include "util/dateparse.hpp"
 
 #include <nlohmann/json.hpp>
@@ -137,6 +138,17 @@ int cmd_logs(const std::vector<std::string>& args, bool json_out) {
     if (!ctx_opt) return fail("no profile; run `libcore login`", json_out, "no_profile");
     auto ctx = *ctx_opt;
 
+    auto prof = core::get_profile(ctx.profile_name);
+    if (!prof) return fail("profile not found", json_out, "profile_not_found");
+
+    if (prof->mode == "remote") {
+        json args_j;
+        if (o.level) args_j["level"] = *o.level;
+        if (o.event) args_j["event"] = *o.event;
+        args_j["tail"] = o.tail;
+        return remote_call(*prof, "logs", args_j, json_out);
+    }
+
     auto database = core::open_library_db(ctx.library);
     if (!resolve_session(ctx, database))
         return fail("session not active; run `libcore login`", json_out, "no_session");
@@ -158,11 +170,11 @@ int cmd_logs(const std::vector<std::string>& args, bool json_out) {
         json arr = json::array();
         for (const auto& l : entries) {
             json one;
-            one["id"]     = l.id;
-            one["ts"]     = l.ts;
-            one["level"]  = l.level;
-            one["event"]  = l.event;
-            one["actor"]  = l.actor_id ? json(*l.actor_id) : json(nullptr);
+            one["id"]      = l.id;
+            one["ts"]      = l.ts;
+            one["level"]   = l.level;
+            one["event"]   = l.event;
+            one["actor"]   = l.actor_id ? json(*l.actor_id) : json(nullptr);
             one["payload"] = l.payload ? json(*l.payload) : json(nullptr);
             arr.push_back(one);
         }
@@ -176,7 +188,6 @@ int cmd_logs(const std::vector<std::string>& args, bool json_out) {
         } else {
             auto s = core::load_settings();
             for (const auto& l : entries) {
-                // Формат: 2026-09-27 10:12:03  INFO   user.login
                 std::string ts = util::format_date(l.ts, s.time_format);
                 std::printf("%s  %-5s  %-20s",
                             ts.c_str(),

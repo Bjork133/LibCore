@@ -1,0 +1,4 @@
+libcore profile list — список профилей.
+
+ИСПОЛЬЗОВАНИЕ:
+    libcore profile list
