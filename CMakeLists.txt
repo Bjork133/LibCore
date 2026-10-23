@@ -17,8 +17,8 @@ include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 
 # --- SQLite ---
-add_library(sqlite3 STATIC third_party/sqlite/sqlite3.c)
-target_include_directories(sqlite3 PUBLIC third_party/sqlite)
+add_library(sqlite3 STATIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite/sqlite3.c)
+target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
 target_compile_definitions(sqlite3 PRIVATE
     SQLITE_OMIT_LOAD_EXTENSION
     SQLITE_DQS=0
@@ -28,34 +28,34 @@ target_compile_options(sqlite3 PRIVATE -w)
 
 # --- nlohmann/json ---
 add_library(nlohmann_json INTERFACE)
-target_include_directories(nlohmann_json INTERFACE third_party/json)
+target_include_directories(nlohmann_json INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/json)
 
 # --- scrypt ---
 add_library(scrypt STATIC
-    third_party/scrypt/lib/scrypt_lib.c
-    third_party/scrypt/lib/pbkdf2.c
-    third_party/scrypt/lib/hmac_sha2.c
-    third_party/scrypt/lib/sha2.c
-    third_party/scrypt/lib/util.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt/lib/scrypt_lib.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt/lib/pbkdf2.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt/lib/hmac_sha2.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt/lib/sha2.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt/lib/util.c
 )
-target_include_directories(scrypt PUBLIC third_party/scrypt)
+target_include_directories(scrypt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/scrypt)
 target_compile_options(scrypt PRIVATE -w -fno-strict-aliasing)
 
 # --- httplib ---
 add_library(httplib INTERFACE)
-target_include_directories(httplib INTERFACE third_party/httplib)
+target_include_directories(httplib INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/httplib)
 
-# --- libcore_lib: всё, кроме main.cpp ---
+# --- libcore_lib ---
 file(GLOB_RECURSE LIBCORE_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 )
-list(REMOVE_ITEM LIBCORE_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
+list(REMOVE_ITEM LIBCORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
 add_library(libcore_lib STATIC ${LIBCORE_SOURCES})
 
 target_include_directories(libcore_lib PUBLIC
-    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
 target_link_libraries(libcore_lib PUBLIC
@@ -66,11 +66,11 @@ target_link_libraries(libcore_lib PUBLIC
     Threads::Threads
 )
 
-# --- Вшивание хелпов в бинарник ---
-set(HELP_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
+# --- Вшивание хелпов ---
+set(HELP_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${HELP_GEN_DIR}")
 
-file(GLOB HELP_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/help/*.txt")
+file(GLOB HELP_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/help/*.txt")
 
 set(HELP_CPP "${HELP_GEN_DIR}/embedded_help.cpp")
 set(HELP_HPP "${HELP_GEN_DIR}/embedded_help.hpp")
@@ -130,12 +130,14 @@ target_compile_definitions(libcore_lib PRIVATE
     LIBCORE_VERSION="${PROJECT_VERSION}"
 )
 
-# --- libcore executable ---
-add_executable(libcore src/main.cpp)
-target_link_libraries(libcore PRIVATE libcore_lib)
+# --- libcore executable (только когда собираем LibCore отдельно) ---
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_executable(libcore ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+    target_link_libraries(libcore PRIVATE libcore_lib)
 
-# --- Install ---
-install(TARGETS libcore RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS libcore_lib ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(DIRECTORY src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libcore FILES_MATCHING PATTERN "*.hpp")
-install(DIRECTORY help/ DESTINATION ${CMAKE_INSTALL_DATADIR}/libcore/help)
+    install(TARGETS libcore RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(TARGETS libcore_lib ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libcore
+            FILES_MATCHING PATTERN "*.hpp")
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/help/ DESTINATION ${CMAKE_INSTALL_DATADIR}/libcore/help)
+endif()
